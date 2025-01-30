@@ -43,6 +43,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     uint256 private _betaIndicator;
     uint256 private _betaUpdate;
     uint256 private _poolSnapshot;
+    uint256 private _betaPoDIndicator;
     bool public _isDividendsActive;
 
     uint256 private constant SECONDS_IN_YEAR = 365 * 24 * 60 * 60; 
@@ -65,6 +66,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         _symbol = "DEF";
         _totalSupply = 0;
         _betaIndicator = 0;
+        _betaPoDIndicator = 0;
         _betaUpdate = 0;
         _poolSnapshot = 0;
         _isDividendsActive = false;
@@ -191,6 +193,10 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         return totalBalance;
     }
 
+    function balanceOfStatic(address account) public view returns (uint256) {
+        return _balances[account];
+    }
+
     function getMultiplicator(uint256 timestamp) public view returns (uint256) {
         uint256 daysElapsed = (block.timestamp - timestamp) / 1 days;
         if (daysElapsed == 0) {
@@ -294,7 +300,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     }
 
     function _subtractFromPortions(address account, uint256 amount) private {
-        if (amount == 0) {
+        if (exemptFromBurn[account] || amount == 0) {
             return;
         }
         
@@ -342,6 +348,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
             }));
 
         _betaIndicator += stakeAmount * xMultipliers[year - 1];
+        _betaPoDIndicator += stakeAmount * year;
 
         if (year != 12) {
             uint256 attentionGrabbing = (amount * 1) / 100;
@@ -354,7 +361,8 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
                 claimedStaking: 0,
                 claimedDividends: 0
             }));
-            _betaIndicator += attentionGrabbing * 12;
+            _betaIndicator += attentionGrabbing * xMultipliers[11];
+            _betaPoDIndicator += attentionGrabbing * 12;
         }
 
         emit TokensStaked(msg.sender, amount, year);
@@ -366,6 +374,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         uint256 amount = stakes[msg.sender][index].amount;
         stakes[msg.sender][index].year = year;
         _betaIndicator += amount * (xMultipliers[stakes[msg.sender][index].year - 1] - xMultipliers[y - 1]);
+        _betaPoDIndicator += amount * (stakes[msg.sender][index].year - y);
     }
 
     function getStakingPositions() external view returns (StakePosition[] memory) {
@@ -379,7 +388,12 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
 
         for (uint256 i = 0; i < count; i++) {
             StakePosition memory stakePosition = stakes[account][i];
-            dividends[i] = countW(stakePosition, currentYearMonth);
+            uint256 startYearMonth = getYearMonth(stakePosition.startTime);
+            if (startYearMonth != currentYearMonth) {
+                dividends[i] = countW(stakePosition, currentYearMonth);
+            } else {
+                 dividends[i] = 0;
+            }
         }
 
         return dividends;
@@ -390,6 +404,9 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         
         StakePosition storage stakePosition = stakes[msg.sender][index];
         uint256 currentYearMonth = getYearMonth(block.timestamp);
+        uint256 startYearMonth = getYearMonth(stakePosition.startTime);
+        require(currentYearMonth > startYearMonth, "Dividends available from next month");
+
         uint256 d = countD(stakePosition, currentYearMonth);
         uint256 w = countW(stakePosition, currentYearMonth);
 
@@ -407,7 +424,9 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
             stakePosition.claimedStaking += fromStaking;
             _balances[dividendPool] -= d;
             stakePosition.amount -= fromStaking;
-            _betaIndicator -= fromStaking * _yearMultiplicator(stakePosition);
+            uint256 y = _yearMultiplicator(stakePosition);
+            _betaIndicator -= fromStaking * xMultipliers[y - 1];
+            _betaPoDIndicator -= fromStaking * y;
         } else {
             stakePosition.claimedDividends += amount;
             _balances[dividendPool] -= amount;
@@ -424,6 +443,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     function initDividendRecount() external onlyRole(TECHNICAL_ROLE) {
         _isDividendsActive = false;
         _betaUpdate = 0;
+        _betaPoDIndicator = 0;
     }
 
     function recountDividends(address[] calldata accounts) external onlyRole(TECHNICAL_ROLE) {
@@ -437,7 +457,10 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
                     stakePosition.amount += d;
                     _balances[dividendPool] -= d;
                 }
-                _betaUpdate += stakePosition.amount * _yearMultiplicator(stakePosition);
+                uint256 y = _yearMultiplicator(stakePosition);
+                _betaUpdate += stakePosition.amount * xMultipliers[y - 1];
+                _betaPoDIndicator += stakePosition.amount * y;
+                
             }
         }
 
@@ -459,7 +482,11 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
 
     function countSM(StakePosition memory stakePosition, uint256 currentYearMonth) private pure returns (uint256) {
         uint256 claimedStaking = currentYearMonth == stakePosition.lastClaimed ? stakePosition.claimedStaking : 0;
-        return _countSM(stakePosition) - claimedStaking;
+        uint256 sm = _countSM(stakePosition);
+        if (sm < claimedStaking) {
+            return 0;
+        }
+        return sm - claimedStaking;
     }
 
     function _countSM(StakePosition memory stakePosition) private pure returns (uint256) {
@@ -470,7 +497,11 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
 
     function countD(StakePosition memory stakePosition, uint256 currentYearMonth) private view returns (uint256) { 
         uint256 claimedDividends = currentYearMonth == stakePosition.lastClaimed ? stakePosition.claimedDividends : 0;
-        return _countD(stakePosition) - claimedDividends;
+        uint256 d = _countD(stakePosition);
+        if (d < claimedDividends) {
+            return 0;
+        }
+        return d - claimedDividends;
     }
 
     function _countD(StakePosition memory stakePosition) private view returns (uint256) {
@@ -482,11 +513,11 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     }
 
     function countPoD(StakePosition memory stakePosition) public view returns (uint256) {
-        if (_betaIndicator == 0) {
+        if (_betaPoDIndicator == 0) {
             return 0;
         }
         uint256 year = _yearMultiplicator(stakePosition);
-        return ((stakePosition.amount * year * 100) / (_betaIndicator));
+        return ((stakePosition.amount * year * 100) / (_betaPoDIndicator));
     }
 
     function _yearMultiplicator(StakePosition memory stakePosition) private view returns (uint256) {
