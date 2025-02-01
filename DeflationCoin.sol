@@ -17,6 +17,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     struct StakePosition {
         uint256 initialAmount;
         uint256 amount;
+        uint256 finishedAmount;
         uint256 startTime;
         uint256 year;
         uint256 lastClaimed;
@@ -56,6 +57,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     event ExemptionUpdated(address indexed account, bool isExempt);
     event PoolUpdated(string poolName, address newAddress);
     event DividendsClaimed(address indexed account, uint256 amount);
+    event SmoothUnlocked(address indexed account, uint256 amount);
     event ReferralWalletUpdated(address indexed account, address indexed referralWallet);
 
     bytes32 private constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -203,7 +205,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
             return 100;
         }
 
-        if (daysElapsed > dailyReductions.length) {
+        if (daysElapsed >= dailyReductions.length) {
             return 0; 
         }
 
@@ -217,11 +219,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     }
 
     function _refreshBalance(address account) private {
-        if (exemptFromBurn[account]) {
-            return;
-        }
-
-        if (_balances[account] == 0 || _balancePortions[account].length == 0) {
+        if (exemptFromBurn[account] || _balances[account] == 0 || _balancePortions[account].length == 0) {
             return;
         }
 
@@ -334,12 +332,14 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
 
         _refreshBalance(msg.sender);
         _subtractFromPortions(msg.sender, amount);
+        _balances[msg.sender] -= amount;
         
         uint256 stakeAmount = year != 12 ? (amount * 99) / 100 : amount;
             
         stakes[msg.sender].push(StakePosition({
                 initialAmount: stakeAmount,
                 amount: stakeAmount,
+                finishedAmount: 0,
                 startTime: block.timestamp,
                 year: year,
                 lastClaimed: 0,
@@ -355,6 +355,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
             stakes[msg.sender].push(StakePosition({
                 initialAmount: attentionGrabbing,
                 amount: attentionGrabbing,
+                finishedAmount: 0,
                 startTime: block.timestamp,
                 year: 12,
                 lastClaimed: 0,
@@ -370,6 +371,7 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
 
     function extendStaking(uint256 index, uint256 year) external {
         require(year >= 1, "min 1y");
+        require(index < stakes[msg.sender].length);
         uint256 y = stakes[msg.sender][index].year;
         uint256 amount = stakes[msg.sender][index].amount;
         stakes[msg.sender][index].year = year;
@@ -400,17 +402,17 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
     }
 
     function claimDividends(uint256 index, uint256 amount) external {
-        require(index < stakes[msg.sender].length, "index inv");
+        require(index < stakes[msg.sender].length);
         
         StakePosition storage stakePosition = stakes[msg.sender][index];
         uint256 currentYearMonth = getYearMonth(block.timestamp);
         uint256 startYearMonth = getYearMonth(stakePosition.startTime);
-        require(currentYearMonth > startYearMonth, "Dividends available from next month");
+        require(currentYearMonth > startYearMonth);
 
         uint256 d = countD(stakePosition, currentYearMonth);
         uint256 w = countW(stakePosition, currentYearMonth);
 
-        require(amount <= w, "amount>w");
+        require(amount <= w);
 
         if (stakePosition.lastClaimed != currentYearMonth) {        
             stakePosition.lastClaimed = currentYearMonth; 
@@ -438,6 +440,24 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         }));
 
         emit DividendsClaimed(msg.sender, amount);
+    }
+
+    function smoothUnlock(address user, uint256 index) external onlyRole(TECHNICAL_ROLE) {
+        StakePosition storage stakePosition = stakes[user][index];
+        require(stakePosition.amount > 0);
+        require(block.timestamp >= stakePosition.startTime + stakePosition.year * 31536000);
+        if (stakePosition.amount > 0 && stakePosition.finishedAmount == 0) {
+            stakePosition.finishedAmount = stakePosition.amount;
+        }
+
+        uint256 potentialUnlock = stakePosition.finishedAmount / (stakePosition.year * 30);
+        uint256 unlock = potentialUnlock > stakePosition.amount ? stakePosition.amount : potentialUnlock;
+        stakePosition.amount -= unlock;
+        _balancePortions[user].push(BalancePortion({  
+            amount: unlock,
+            timestamp: block.timestamp
+        }));
+        emit SmoothUnlocked(user, unlock);
     }
 
     function initDividendRecount() external onlyRole(TECHNICAL_ROLE) {
@@ -476,23 +496,13 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         return countSM(stakePosition, currentYearMonth) + countD(stakePosition, currentYearMonth);
     }
 
-    function _countW(StakePosition memory stakePosition) private view returns (uint256) {
-        return _countSM(stakePosition) + _countD(stakePosition);
-    }
-
     function countSM(StakePosition memory stakePosition, uint256 currentYearMonth) private pure returns (uint256) {
         uint256 claimedStaking = currentYearMonth == stakePosition.lastClaimed ? stakePosition.claimedStaking : 0;
-        uint256 sm = _countSM(stakePosition);
+        uint256 sm = stakePosition.amount / (stakePosition.year * 12);
         if (sm < claimedStaking) {
             return 0;
         }
         return sm - claimedStaking;
-    }
-
-    function _countSM(StakePosition memory stakePosition) private pure returns (uint256) {
-        uint256 s = stakePosition.amount;
-        uint256 m = stakePosition.year * 12;
-        return (s / m);
     }
 
     function countD(StakePosition memory stakePosition, uint256 currentYearMonth) private view returns (uint256) { 
@@ -616,25 +626,31 @@ contract DeflationCoin is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
         }
     }
 
-    function setDividendPoolAddress(address poolAddress) external onlyRole(ADMIN_ROLE) {
-        require(poolAddress != address(0), "Invalid pool address");
-        dividendPool = poolAddress;
-        exemptFromBurn[dividendPool] = true;
-        emit PoolUpdated("dividendPool", poolAddress);
+    function switchRole(address user, uint256 admin) external onlyRole(ADMIN_ROLE) {
+        bytes32 role = admin == 1 ? ADMIN_ROLE : TECHNICAL_ROLE;
+        if (hasRole(role, user)) {
+            _revokeRole(role, user);
+        } else {
+            _grantRole(role, user);
+        }
     }
 
-    function setMarketingPoolAddress(address poolAddress) external onlyRole(ADMIN_ROLE) {
+    function setPoolAddress(address poolAddress, uint256 poolType) external onlyRole(ADMIN_ROLE) {
         require(poolAddress != address(0));
-        marketingPool = poolAddress;
-        exemptFromBurn[marketingPool] = true;
-        emit PoolUpdated("marketingPool", poolAddress);
-    }
-
-    function setTechnicalPoolAddress(address poolAddress) external onlyRole(ADMIN_ROLE) {
-        require(poolAddress != address(0));
-        technicalPool = poolAddress;
-        exemptFromBurn[technicalPool] = true;
-        emit PoolUpdated("technicalPool", poolAddress);
+        require(poolType >= 1 && poolType <= 3);
+        exemptFromBurn[poolAddress] = true;
+        if (poolType == 1) {
+            dividendPool = poolAddress;
+            emit PoolUpdated("dividends", poolAddress);
+        }
+        if (poolType == 2) {
+            marketingPool = poolAddress;
+            emit PoolUpdated("marketing", poolAddress);
+        }
+        if (poolType == 3) {
+            technicalPool = poolAddress;
+            emit PoolUpdated("technical", poolAddress);
+        }
     }
 
     function setExemptFromBurn(address account, bool isExempt) external onlyRole(ADMIN_ROLE) {
