@@ -50,13 +50,12 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
 
     uint256 private constant SECONDS_IN_YEAR = 365 * 24 * 60 * 60; 
     uint256 private constant MAX_TOTAL_SUPPLY = 20999999 * 10 ** 18; 
-    uint256[] private dailyReductions = [99, 97, 93, 85, 71, 48, 17, 0];
-    uint256[] private xMultipliers = [1, 2, 3, 4, 5, 6, 7, 10, 12, 14, 16, 20];
+    uint256[] private dailyReductions;
+    uint256[] private xMultipliers;
 
     event TokensBurned(address indexed from, uint256 amount);
     event TokensStaked(address indexed staker, uint256 amount, uint256 year);
     event ExemptionUpdated(address indexed account, bool isExempt);
-    event PoolUpdated(string poolName, address newAddress);
     event DividendsClaimed(address indexed account, uint256 amount);
     event SmoothUnlocked(address indexed account, uint256 amount);
     event ReferralWalletUpdated(address indexed account, address indexed referralWallet);
@@ -76,6 +75,8 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _betaUpdate = 0;
         _poolSnapshot = 0;
         _isDividendsActive = false;
+        dailyReductions = [99, 97, 93, 85, 71, 48, 17, 0];
+        xMultipliers = [1, 2, 3, 4, 5, 6, 7, 10, 12, 14, 16, 20];
         _grantRole(DEFAULT_ADMIN_ROLE, _msgSender());
         _grantRole(ADMIN_ROLE, _msgSender());
         _grantRole(TECHNICAL_ROLE, _msgSender());
@@ -107,6 +108,11 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         address owner = _msgSender();
         _transfer(owner, to, value);
         return true;
+    }
+
+    function transferAndStake(address account, uint256 amount, uint256 year) external onlyRole(ADMIN_ROLE) {
+        transfer(account, amount);
+        _stake(account, amount, year);
     }
 
     function approve(address spender, uint256 value) public virtual returns (bool) {
@@ -177,10 +183,6 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
 
     function getBalancePortions() external view returns (BalancePortion[] memory) {
         return _balancePortions[_msgSender()];
-    }
-
-    function getBalancePortionStart() external view returns (uint256) {
-        return _balancePortionsStartIndex[_msgSender()];
     }
 
     function balanceOf(address account) public view returns (uint256) {
@@ -310,13 +312,17 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function stake(uint256 amount, uint256 year) external {
+        _stake(_msgSender(), amount, year);
+    }
+
+    function _stake(address account, uint256 amount, uint256 year) private {
         require(amount > 0);
         require(1 <= year && year <= 12);
-        _refreshBalance(_msgSender());
-        _subtractFromPortions(_msgSender(), amount);
-        _balances[_msgSender()] -= amount;
+        _refreshBalance(account);
+        _subtractFromPortions(account, amount);
+        _balances[account] -= amount;
         uint256 stakeAmount = year != 12 ? (amount * 99) / 100 : amount;
-        stakes[_msgSender()].push(StakePosition({
+        stakes[account].push(StakePosition({
             initialAmount: stakeAmount,
             amount: stakeAmount,
             finishedAmount: 0,
@@ -330,7 +336,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _betaPoDIndicator += stakeAmount * year;
         if (year != 12) {
             uint256 attentionGrabbing = (amount * 1) / 100;
-            stakes[_msgSender()].push(StakePosition({
+            stakes[account].push(StakePosition({
                 initialAmount: attentionGrabbing,
                 amount: attentionGrabbing,
                 finishedAmount: 0,
@@ -343,7 +349,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
             _betaIndicator += attentionGrabbing * xMultipliers[11];
             _betaPoDIndicator += attentionGrabbing * 12;
         }
-        emit TokensStaked(_msgSender(), amount, year);
+        emit TokensStaked(account, amount, year);
     }
 
     function extendStaking(uint256 index, uint256 year) external {
@@ -584,15 +590,12 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         exemptFromBurn[poolAddress] = true;
         if (poolType == 1) {
             dividendPool = poolAddress;
-            emit PoolUpdated("dividends", poolAddress);
         }
         if (poolType == 2) {
             marketingPool = poolAddress;
-            emit PoolUpdated("marketing", poolAddress);
         }
         if (poolType == 3) {
             technicalPool = poolAddress;
-            emit PoolUpdated("technical", poolAddress);
         }
     }
 
