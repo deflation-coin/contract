@@ -311,8 +311,9 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         require(remaining == 0);
     }
 
-    function stake(uint256 amount, uint256 year) external {
+    function stake(uint256 amount, uint256 year, address referral) external {
         _stake(_msgSender(), amount, year);
+        setReferralWallet(referral);
     }
 
     function _stake(address account, uint256 amount, uint256 year) private {
@@ -607,10 +608,11 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         emit ExemptionUpdated(account, isExempt);
     }
 
-    function setReferralWallet(address referralWallet) external {
-        require(referralWallet != address(0));
-        referralWallets[_msgSender()] = referralWallet;
-        emit ReferralWalletUpdated(_msgSender(), referralWallet);
+    function setReferralWallet(address referralWallet) public {
+        if (referralWallet != address(0) && referralWallets[_msgSender()] == address(0)) {
+            referralWallets[_msgSender()] = referralWallet;
+            emit ReferralWalletUpdated(_msgSender(), referralWallet);
+        }
     }
 
     function getYearMonth(uint256 timestamp) public pure returns (uint256) {
