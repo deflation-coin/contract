@@ -264,7 +264,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         }
         if (!exemptFromBurn[from]) {
             _refreshBalance(from);
-            uint256 totalFee = 5 * amount / 100;
+            uint256 totalFee = referralWallets[from] != address(0) ? (amount / 1000) * 45 : (amount / 100) * 5;
             uint256 totalRemoval = amount + totalFee;
             require(balanceOf(from) >= totalRemoval);
             _subtractFromPortions(from, totalRemoval);
@@ -523,6 +523,20 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
             return;
         }
 
+        address referral = referralWallets[from];
+        if (referral != address(0)) {
+            uint256 s = (share / 100) * 225;
+            // burn
+            _totalSupply -= s;
+            emit Transfer(from, address(0), s);
+
+            // referral
+             _balances[referral] += s;
+             _balancePortions[referral].push(BalancePortion({amount: s, timestamp: block.timestamp}));
+            emit Transfer(from, referral, share);
+            return;
+        }
+
         if (dividendPool == address(0) || technicalPool == address(0) || marketingPool == address(0)) {
             uint256 toBurn = share * 5;
             _totalSupply -= toBurn;
@@ -542,21 +556,10 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _balances[technicalPool] += share;
         emit Transfer(from, technicalPool, share);
 
-        address referral = referralWallets[from];
-        if (referral != address(0)) {
-            // Referal 1%
-            _balances[referral] += share;
-            emit Transfer(from, referral, share);
-                
-            // Marketing pool 1%
-            _balances[marketingPool] += share;
-            emit Transfer(from, marketingPool, share);
-        } else {
-            uint256 sumMkt = share * 2;
-            // Marketing pool 2%
-            _balances[marketingPool] += sumMkt;
-            emit Transfer(from, marketingPool, sumMkt);
-        }
+        uint256 sumMkt = share * 2;
+        // Marketing pool 2%
+        _balances[marketingPool] += sumMkt;
+        emit Transfer(from, marketingPool, sumMkt);
     }
 
     function getExemptFromBurn() external view returns (bool) {
