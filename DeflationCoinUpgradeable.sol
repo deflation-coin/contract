@@ -308,7 +308,6 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
             }
         }
         _balancePortionsStartIndex[account] = startIndex;
-        require(remaining == 0);
     }
 
     function stake(uint256 amount, uint256 year, address referral) external {
@@ -317,8 +316,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function _stake(address account, uint256 amount, uint256 year) private {
-        require(amount > 0);
-        require(1 <= year && year <= 12);
+        require(amount > 0 && 1 <= year && year <= 12);
         _refreshBalance(account);
         _subtractFromPortions(account, amount);
         _balances[account] -= amount;
@@ -336,7 +334,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _betaIndicator += stakeAmount * xMultipliers[year - 1];
         _betaPoDIndicator += stakeAmount * year;
         if (year != 12) {
-            uint256 attentionGrabbing = (amount * 1) / 100;
+            uint256 attentionGrabbing = amount - stakeAmount;
             stakes[account].push(StakePosition({
                 initialAmount: attentionGrabbing,
                 amount: attentionGrabbing,
@@ -476,7 +474,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         return sm - claimedStaking;
     }
 
-    function countD(StakePosition memory stakePosition, uint256 currentYearMonth) private view returns (uint256) { 
+    function countD(StakePosition memory stakePosition, uint256 currentYearMonth) public view returns (uint256) { 
         uint256 claimedDividends = currentYearMonth == stakePosition.lastClaimed ? stakePosition.claimedDividends : 0;
         uint256 d = _countD(stakePosition);
         if (d < claimedDividends) {
@@ -589,8 +587,6 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function setPoolAddress(address poolAddress, uint256 poolType) external onlyRole(ADMIN_ROLE) {
-        require(poolAddress != address(0));
-        require(poolType >= 1 && poolType <= 3);
         exemptFromBurn[poolAddress] = true;
         if (poolType == 1) {
             dividendPool = poolAddress;
@@ -615,7 +611,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         }
     }
 
-    function getYearMonth(uint256 timestamp) public pure returns (uint256) {
+    function getYearMonth(uint256 timestamp) private pure returns (uint256) {
         uint256 daysSinceEpoch = timestamp / 86400;
         uint256 L = daysSinceEpoch + 2440588 + 68569;
         uint256 N = (4 * L) / 146097;
@@ -629,7 +625,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
        return I * 100 + J;
     }
 
-    function getPreviousYearMonth(uint256 timestamp) public pure returns (uint256) {
+    function getPreviousYearMonth(uint256 timestamp) private pure returns (uint256) {
         uint256 currentYearMonth = getYearMonth(timestamp); 
         uint256 year = currentYearMonth / 100; 
         uint256 month = currentYearMonth % 100;
