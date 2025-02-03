@@ -213,7 +213,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         if (daysElapsed >= dailyReductions.length) {
             return 0; 
         }
-        return dailyReductions[daysElapsed];
+        return dailyReductions[daysElapsed - 1];
     }
 
     function refreshBalance(address[] calldata accounts) public onlyRole(TECHNICAL_ROLE) {
