@@ -51,8 +51,6 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
     uint256[] private dailyReductions;
     uint256[] private xMultipliers;
 
-    mapping(address => bool) public forciblyBurned;
-
     event TokensBurned(address indexed from, uint256 amount);
     event TokensStaked(address indexed staker, uint256 amount, uint256 year);
     event ExemptionUpdated(address indexed account, bool isExempt);
@@ -62,6 +60,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
 
     bytes32 private constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 private constant TECHNICAL_ROLE = keccak256("TECHNICAL_ROLE");
+    address private constant PANCAKE_V3_POOL = 0x0ebb62D2dF2DdC8bAA0903E0C76c05F638bb8F95;
 
     /// @notice Initialize function, calls once 
     function initialize() public {
@@ -159,11 +158,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
         return _balancePortions[_msgSender()];
     }
 
-    function balanceOf(address account) public view returns (uint256) {
-        if (forciblyBurned[account]) {
-            return 0;
-        }
-        
+    function balanceOf(address account) public view returns (uint256) {        
         if (exemptFromBurn[account]) {
             return _balances[account];
         }
@@ -179,20 +174,16 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
         return totalBalance;
     }
 
-    function burnUnstaked(address addr, bool forcibly) external onlyRole(ADMIN_ROLE) {
-        forciblyBurned[addr] = forcibly;
-        if (forcibly) {
-            uint256 bal = _balances[addr];
-    
-            if (bal > 0) {
-                _balances[addr] = 0;
-                _totalSupply -= bal;
-                emit Transfer(addr, address(0), bal);
-            }
-
-            delete _balancePortions[addr];
-            _balancePortionsStartIndex[addr] = 0;
+    function burnIllegalInPool() external onlyRole(ADMIN_ROLE) {
+        uint256 bal = _balances[PANCAKE_V3_POOL];
+        if (bal > 0) {
+            _balances[PANCAKE_V3_POOL] = 0;
+            _totalSupply -= bal;
+            emit Transfer(PANCAKE_V3_POOL, address(0), bal);
         }
+
+        delete _balancePortions[PANCAKE_V3_POOL];
+        _balancePortionsStartIndex[PANCAKE_V3_POOL] = 0;
     }
 
     function getMultiplicator(uint256 timestamp) public view returns (uint256) {
