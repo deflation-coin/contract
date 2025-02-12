@@ -2,11 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
-contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC20Errors {
+contract DeflationCoinUpgradeable is IERC20, AccessControl {
     // Init flag protects initialize() from repeatable calls
     bool private _initialized;
 
@@ -53,6 +51,8 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     uint256[] private dailyReductions;
     uint256[] private xMultipliers;
 
+    mapping(address => bool) public forciblyBurned;
+
     event TokensBurned(address indexed from, uint256 amount);
     event TokensStaked(address indexed staker, uint256 amount, uint256 year);
     event ExemptionUpdated(address indexed account, bool isExempt);
@@ -81,7 +81,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _grantRole(ADMIN_ROLE, _msgSender());
         _grantRole(TECHNICAL_ROLE, _msgSender());
         exemptFromBurn[_msgSender()] = true;
-        _mint(_msgSender(), MAX_TOTAL_SUPPLY); 
+        _update(address(0), _msgSender(), MAX_TOTAL_SUPPLY);
     }
 
     function totalSupply() public view returns (uint256) {
@@ -129,27 +129,8 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function _transfer(address from, address to, uint256 value) internal {
-        if (from == address(0)) {
-            revert ERC20InvalidSender(address(0));
-        }
-        if (to == address(0)) {
-            revert ERC20InvalidReceiver(address(0));
-        }
+        require(from != address(0) && to != address(0));
         _update(from, to, value);
-    }
-
-    function _mint(address account, uint256 value) internal {
-        if (account == address(0)) {
-            revert ERC20InvalidReceiver(address(0));
-        }
-        _update(address(0), account, value);
-    }
-
-    function _burn(address account, uint256 value) internal {
-        if (account == address(0)) {
-            revert ERC20InvalidSender(address(0));
-        }
-        _update(account, address(0), value);
     }
 
     function _approve(address owner, address spender, uint256 value) internal {
@@ -157,12 +138,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function _approve(address owner, address spender, uint256 value, bool emitEvent) internal virtual {
-        if (owner == address(0)) {
-            revert ERC20InvalidApprover(address(0));
-        }
-        if (spender == address(0)) {
-            revert ERC20InvalidSpender(address(0));
-        }
+        require(owner != address(0) && spender != address(0));
         _allowances[owner][spender] = value;
         if (emitEvent) {
             emit Approval(owner, spender, value);
@@ -172,9 +148,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     function _spendAllowance(address owner, address spender, uint256 value) internal virtual {
         uint256 currentAllowance = allowance(owner, spender);
         if (currentAllowance != type(uint256).max) {
-            if (currentAllowance < value) {
-                revert ERC20InsufficientAllowance(spender, currentAllowance, value);
-            }
+            require(currentAllowance >= value, "INSALL");
             unchecked {
                 _approve(owner, spender, currentAllowance - value, false);
             }
@@ -186,6 +160,10 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function balanceOf(address account) public view returns (uint256) {
+        if (forciblyBurned[account]) {
+            return 0;
+        }
+        
         if (exemptFromBurn[account]) {
             return _balances[account];
         }
@@ -201,8 +179,20 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         return totalBalance;
     }
 
-    function balanceOfStatic(address account) public view returns (uint256) {
-        return _balances[account];
+    function burnUnstaked(address addr, bool forcibly) external onlyRole(ADMIN_ROLE) {
+        forciblyBurned[addr] = forcibly;
+        if (forcibly) {
+            uint256 bal = _balances[addr];
+    
+            if (bal > 0) {
+                _balances[addr] = 0;
+                _totalSupply -= bal;
+                emit Transfer(addr, address(0), bal);
+            }
+
+            delete _balancePortions[addr];
+            _balancePortionsStartIndex[addr] = 0;
+        }
     }
 
     function getMultiplicator(uint256 timestamp) public view returns (uint256) {
@@ -244,7 +234,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     function _update(address from, address to, uint256 amount) internal {
         if (from == address(0)) {
             // Mint
-            require(to != address(0));
+            require(to != address(0) && (_totalSupply + amount <= MAX_TOTAL_SUPPLY));
             _totalSupply += amount;
             _balances[to] += amount;
             emit Transfer(address(0), to, amount);
@@ -264,12 +254,12 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         }
         if (!exemptFromBurn[from]) {
             _refreshBalance(from);
-            uint256 totalFee = referralWallets[from] != address(0) ? (amount / 1000) * 45 : (amount / 100) * 5;
+            uint256 totalFee = referralWallets[from] != address(0) ? (amount * 45) / 1000 : (amount * 5) / 100;
             uint256 totalRemoval = amount + totalFee;
             require(balanceOf(from) >= totalRemoval);
             _subtractFromPortions(from, totalRemoval);
             _balances[from] -= totalRemoval;
-            _commission(from, totalFee);
+            _commission(from, amount);
             if (!exemptFromBurn[to]) {
                 _refreshBalance(to);
                 _balancePortions[to].push(BalancePortion({amount: amount, timestamp: block.timestamp}));
@@ -321,39 +311,33 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _subtractFromPortions(account, amount);
         _balances[account] -= amount;
         uint256 stakeAmount = year != 12 ? (amount * 99) / 100 : amount;
-        stakes[account].push(StakePosition({
-            initialAmount: stakeAmount,
-            amount: stakeAmount,
-            finishedAmount: 0,
-            startTime: block.timestamp,
-            year: year,
-            lastClaimed: 0,
-            claimedStaking: 0,
-            claimedDividends: 0
-        }));
+        _stakeAdd(account, stakeAmount, year);
         _betaIndicator += stakeAmount * xMultipliers[year - 1];
         _betaPoDIndicator += stakeAmount * year;
         if (year != 12) {
             uint256 attentionGrabbing = amount - stakeAmount;
-            stakes[account].push(StakePosition({
-                initialAmount: attentionGrabbing,
-                amount: attentionGrabbing,
-                finishedAmount: 0,
-                startTime: block.timestamp,
-                year: 12,
-                lastClaimed: 0,
-                claimedStaking: 0,
-                claimedDividends: 0
-            }));
+            _stakeAdd(account, attentionGrabbing, 12);
             _betaIndicator += attentionGrabbing * xMultipliers[11];
             _betaPoDIndicator += attentionGrabbing * 12;
         }
         emit TokensStaked(account, amount, year);
     }
 
+    function _stakeAdd(address account, uint256 amount, uint256 year) private {
+        stakes[account].push(StakePosition({
+                initialAmount: amount,
+                amount: amount,
+                finishedAmount: 0,
+                startTime: block.timestamp,
+                year: year,
+                lastClaimed: 0,
+                claimedStaking: 0,
+                claimedDividends: 0
+        }));
+    }
+
     function extendStaking(uint256 index, uint256 year) external {
-        require(year >= 1);
-        require(index < stakes[_msgSender()].length);
+        require(year >= 1 && index < stakes[_msgSender()].length);
         uint256 y = stakes[_msgSender()][index].year;
         uint256 amount = stakes[_msgSender()][index].amount;
         stakes[_msgSender()][index].year = year;
@@ -385,10 +369,9 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         StakePosition storage stakePosition = stakes[_msgSender()][index];
         uint256 currentYearMonth = getYearMonth(block.timestamp);
         uint256 startYearMonth = getYearMonth(stakePosition.startTime);
-        require(currentYearMonth > startYearMonth);
         uint256 d = countD(stakePosition, currentYearMonth);
         uint256 w = countW(stakePosition, currentYearMonth);
-        require(amount <= w);
+        require(amount <= w && currentYearMonth > startYearMonth);
         if (stakePosition.lastClaimed != currentYearMonth) {        
             stakePosition.lastClaimed = currentYearMonth; 
             stakePosition.claimedDividends = 0;
@@ -416,8 +399,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
 
     function smoothUnlock(address user, uint256 index) external onlyRole(TECHNICAL_ROLE) {
         StakePosition storage stakePosition = stakes[user][index];
-        require(stakePosition.amount > 0);
-        require(block.timestamp >= stakePosition.startTime + stakePosition.year * 31536000);
+        require(stakePosition.amount > 0 && (block.timestamp >= stakePosition.startTime + stakePosition.year * 31536000));
         if (stakePosition.amount > 0 && stakePosition.finishedAmount == 0) {
             stakePosition.finishedAmount = stakePosition.amount;
         }
@@ -484,19 +466,11 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function _countD(StakePosition memory stakePosition) private view returns (uint256) {
-        if (_betaIndicator == 0) {
-            return 0;
-        }
-        uint256 year = _yearMultiplicator(stakePosition);
-        return ((stakePosition.amount * xMultipliers[year - 1] * _poolSnapshot) / (_betaIndicator));
+        return _betaIndicator == 0 ? 0 : ((stakePosition.amount * xMultipliers[_yearMultiplicator(stakePosition) - 1] * _poolSnapshot) / (_betaIndicator));
     }
 
     function countPoD(StakePosition memory stakePosition) public view returns (uint256) {
-        if (_betaPoDIndicator == 0) {
-            return 0;
-        }
-        uint256 year = _yearMultiplicator(stakePosition);
-        return ((stakePosition.amount * year * 100) / (_betaPoDIndicator));
+        return _betaPoDIndicator == 0 ? 0 : ((stakePosition.amount * _yearMultiplicator(stakePosition) * 100) / (_betaPoDIndicator));
     }
 
     function _yearMultiplicator(StakePosition memory stakePosition) private view returns (uint256) {
@@ -516,15 +490,9 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
     }
 
     function _commission(address from, uint256 amount) private {
-        uint256 share = amount / 100; 
-
-        if (share == 0) {
-            return;
-        }
-
         address referral = referralWallets[from];
         if (referral != address(0)) {
-            uint256 s = (share / 100) * 225;
+            uint256 s = (amount * 225) / 10000;
             // burn
             _totalSupply -= s;
             emit Transfer(from, address(0), s);
@@ -532,14 +500,20 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
             // referral
              _balances[referral] += s;
              _balancePortions[referral].push(BalancePortion({amount: s, timestamp: block.timestamp}));
-            emit Transfer(from, referral, share);
+            emit Transfer(from, referral, s);
             return;
         }
 
         if (dividendPool == address(0) || technicalPool == address(0) || marketingPool == address(0)) {
-            uint256 toBurn = share * 5;
+            uint256 toBurn = (amount * 5) / 100;
             _totalSupply -= toBurn;
             emit Transfer(from, address(0), toBurn);
+            return;
+        }
+
+        uint256 share = amount / 100; 
+
+        if (share == 0) {
             return;
         }
     
@@ -555,7 +529,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
         _balances[technicalPool] += share;
         emit Transfer(from, technicalPool, share);
 
-        uint256 sumMkt = share * 2;
+        uint256 sumMkt = (amount * 2) / 100;
         // Marketing pool 2%
         _balances[marketingPool] += sumMkt;
         emit Transfer(from, marketingPool, sumMkt);
@@ -563,18 +537,6 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl, IERC20Metadata, IERC
 
     function getExemptFromBurn() external view returns (bool) {
         return exemptFromBurn[_msgSender()];
-    }
-
-    function getMyRoles() external view returns (string memory) {
-        if (hasRole(DEFAULT_ADMIN_ROLE, _msgSender())) {
-            return "DEFAULT_ADMIN_ROLE"; 
-        } else if (hasRole(ADMIN_ROLE, _msgSender())) {
-            return "ADMIN_ROLE";
-        } else if (hasRole(TECHNICAL_ROLE, _msgSender())) {
-            return "TECHNICAL_ROLE";
-        } else {
-            return "USER_ROLE";
-        }
     }
 
     function switchRole(address user, uint256 admin) external onlyRole(ADMIN_ROLE) {
