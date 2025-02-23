@@ -1,4 +1,4 @@
-# DeflationCoin - The Most Deflationary Currency in History
+# DeflationCoin - the most deflationary currency
 
 **Official website:**  
 🔗 [https://deflationcoin.com](https://deflationcoin.com)  
@@ -8,9 +8,8 @@
 
 ---
 
-## Try running some of the following tasks:
+## To run tests:
 
 ```shell
-npx hardhat help
 npx hardhat test
 REPORT_GAS=true npx hardhat test
