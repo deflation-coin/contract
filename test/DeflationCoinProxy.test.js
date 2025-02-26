@@ -179,18 +179,6 @@ describe("DeflationCoinProxy + DeflationCoinUpgradeable", function () {
             expect(user1BalAfter).to.equal(ethers.parseEther("50"));
         });
 
-        it("burnIllegalInPool", async function () {
-            const pancakePool = "0x0ebb62D2dF2DdC8bAA0903E0C76c05F638bb8F95";
-            await logicContractV1.connect(owner).transfer(
-                pancakePool,
-                ethers.parseEther("100")
-            );
-            await logicContractV1.connect(owner).burnIllegalInPool();
-
-            const poolBal = await logicContractV1.balanceOf(pancakePool);
-            expect(poolBal).to.equal(0n);
-        });
-
         it("Commission: share == 0 when all pools are set and amount < 100", async function () {
             await logicContractV1.connect(owner).setPoolAddress(await user2.getAddress(), 1);
             await logicContractV1.connect(owner).setPoolAddress(await admin.getAddress(), 2);
@@ -1192,13 +1180,6 @@ describe("DeflationCoinProxy + DeflationCoinUpgradeable", function () {
                 "AccessControlUnauthorizedAccount"
             );
 
-
-            await expect(
-                logicContractV1.connect(user1).burnIllegalInPool()
-            ).to.be.revertedWithCustomError(
-                logicContractV1,
-                "AccessControlUnauthorizedAccount" 
-            );
         });
 
         it("ADMIN_ROLE can assign ADMIN_ROLE", async function () {
@@ -1251,20 +1232,6 @@ describe("DeflationCoinProxy + DeflationCoinUpgradeable", function () {
 
             const balUser2 = await logicContractV1.balanceOf(user2.address);
             expect(balUser2).to.equal(ethers.parseEther("200"));
-        });
-
-
-        it("burnIllegalInPool() when bal=0 => does nothing", async function () {
-            const pancakePool = "0x0ebb62D2dF2DdC8bAA0903E0C76c05F638bb8F95";
-            let bal = await logicContractV1.balanceOf(pancakePool);
-            expect(bal).to.equal(0n);
-
-            await expect(
-                logicContractV1.connect(owner).burnIllegalInPool()
-            ).to.not.emit(logicContractV1, "Transfer");
-
-            bal = await logicContractV1.balanceOf(pancakePool);
-            expect(bal).to.equal(0n);
         });
 
         it("covers _refreshBalance when !exempt[user], balance>0, but balancePortions.length=0 => hits length==0 branch", async function () {
@@ -1446,5 +1413,34 @@ describe("DeflationCoinProxy + DeflationCoinUpgradeable", function () {
             }
         });
 
+        it("Should revert if msg.sender != router and to == PANCAKE_V3_POOL and from is not exempt", async function () {
+            // 1. Ensure user1 is NOT exempt
+            await logicContractV1.connect(owner).setExemptFromBurn(user1.address, false);
+        
+            // 2. Transfer some tokens to user1 so they have a balance
+            await logicContractV1.connect(owner).transfer(
+                user1.address,
+                ethers.parseEther("100")
+            );
+        
+            // 3. Approve user2 to spend user1's tokens
+            await logicContractV1.connect(user1).approve(
+                user2.address,
+                ethers.parseEther("100")
+            );
+        
+            // 4. Attempt transferFrom with user2 calling the function,
+            //    sending tokens to the PANCAKE_V3_POOL.
+            //    Since msg.sender = user2 != router, we expect a revert.
+            const PANCAKE_V3_POOL = "0x0ebb62D2dF2DdC8bAA0903E0C76c05F638bb8F95";
+        
+            await expect(
+                logicContractV1.connect(user2).transferFrom(
+                    user1.address,
+                    PANCAKE_V3_POOL,
+                    ethers.parseEther("50")
+                )
+            ).to.be.revertedWith("Not allowed to transfer to pool unless from router");
+        });
     });
 });

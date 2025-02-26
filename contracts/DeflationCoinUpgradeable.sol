@@ -104,8 +104,11 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
     bytes32 private constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 private constant TECHNICAL_ROLE = keccak256("TECHNICAL_ROLE");
 
-    // Pancake V3 Pool address (for illegal burn method)
+    // Pancake V3 Pool address
     address private constant PANCAKE_V3_POOL = 0x0ebb62D2dF2DdC8bAA0903E0C76c05F638bb8F95;
+
+    // Pancake V3 Router address
+    address private constant PANCAKE_V3_ROUTER = 0x1b81D678ffb9C0263b24A97847620C99d213eB14;
 
     /// @notice Initialize function, calls once 
     function initialize() public {
@@ -206,6 +209,13 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
      */
     function transferFrom(address from, address to, uint256 value) public virtual returns (bool) {
         address spender = _msgSender();
+        
+        // Block adding liquidity to the pool, allow only the wallet for investors (excluded from burning). 
+        // Other wallets are allowed only to make an exchange in the non-burnable pool
+        if (!exemptFromBurn[from] && to == PANCAKE_V3_POOL && spender != PANCAKE_V3_ROUTER) {
+            revert("Not allowed to transfer to pool unless from router");
+        }
+
         _spendAllowance(from, spender, value);
         _transfer(from, to, value);
         return true;
@@ -282,22 +292,6 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
             totalBalance += (portion.amount * multiplier) / 100;
         }
         return totalBalance;
-    }
-
-    /**
-     * @dev Allows an admin to burn any tokens that may be stuck in the Pancake V3 Pool address illegally.
-     *      Sets that pool's balance to zero and removes any leftover portion entries.
-     */
-    function burnIllegalInPool() external onlyRole(TECHNICAL_ROLE) {
-        uint256 bal = _balances[PANCAKE_V3_POOL];
-        if (bal > 0) {
-            _balances[PANCAKE_V3_POOL] = 0;
-            _totalSupply -= bal;
-            emit Transfer(PANCAKE_V3_POOL, address(0), bal);
-        }
-
-        delete _balancePortions[PANCAKE_V3_POOL];
-        _balancePortionsStartIndex[PANCAKE_V3_POOL] = 0;
     }
 
     /**
