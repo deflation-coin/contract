@@ -392,18 +392,25 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
         if (exemptFromBurn[account] || amount == 0) {
             return;
         }
-        uint256 remaining = amount;
         require(balanceOf(account) >= amount);
         uint256 startIndex = _balancePortionsStartIndex[account];
         uint256 length = _balancePortions[account].length;
+        uint256 remaining = amount;
         while (remaining > 0 && startIndex < length) {
             BalancePortion storage portion = _balancePortions[account][startIndex];
-            if (portion.amount <= remaining) {
-                remaining -= portion.amount;
+            uint256 mult = getMultiplicator(portion.timestamp); 
+            if (mult == 0) {
                 portion.amount = 0;
                 startIndex++;
+                continue;
+            }
+            uint256 portionEffective = (portion.amount * mult) / 100;
+            if (portionEffective <= remaining) {
+                portion.amount = 0;
+                remaining -= portionEffective;
+                startIndex++;
             } else {
-                portion.amount -= remaining;
+                portion.amount = ((portionEffective - remaining) * 100) / mult;
                 remaining = 0;
             }
         }

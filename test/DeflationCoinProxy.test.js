@@ -1442,5 +1442,35 @@ describe("DeflationCoinProxy + DeflationCoinUpgradeable", function () {
                 )
             ).to.be.revertedWith("Not allowed to transfer to pool unless from router");
         });
+
+        it("Covers lines `if (portion.amount == 0)` and `if (mult == 0)` in _subtractFromPortions", async function () {
+            await logicContractV1.connect(owner).setExemptFromBurn(user1.address, false);
+            await logicContractV1.connect(owner).setPoolAddress(ethers.ZeroAddress, 1);
+            await logicContractV1.connect(owner).setPoolAddress(ethers.ZeroAddress, 2);
+            await logicContractV1.connect(owner).setPoolAddress(ethers.ZeroAddress, 3);
+            await logicContractV1.connect(owner).transfer(
+                user1.address,
+                ethers.parseEther("105")
+            );
+            await logicContractV1.connect(user1).transfer(
+                user2.address,
+                ethers.parseEther("100")
+            );
+            await logicContractV1.connect(owner).transfer(
+                user1.address,
+                ethers.parseEther("1")
+            );
+            await ethers.provider.send("evm_increaseTime", [9 * 24 * 3600]);
+            await ethers.provider.send("evm_mine", []);
+            await logicContractV1.connect(owner).transfer(
+                user1.address,
+                ethers.parseEther("10")
+            );
+            await logicContractV1.connect(user1).transfer(
+                user2.address,
+                ethers.parseEther("1")
+            );
+        });
+        
     });
 });
