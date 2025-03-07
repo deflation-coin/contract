@@ -777,6 +777,7 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
      */
     function setPoolAddress(address poolAddress, uint256 poolType) external onlyRole(ADMIN_ROLE) {
         require(poolAddress != address(0), "Pool address can't be zero");
+        require(!isContract(poolAddress), "Address can not be a contract address");
         exemptFromBurn[poolAddress] = true;
         if (poolType == 1) {
             dividendPool = poolAddress;
@@ -788,6 +789,17 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
             technicalPool = poolAddress;
         }
         emit PoolAddressUpdated(poolAddress, poolType);
+    }
+
+    /**
+     * Checks whether address is contract
+     */
+    function isContract(address account) internal view returns (bool) {
+        uint32 size;
+        assembly {
+            size := extcodesize(account)
+        }
+        return (size > 0);
     }
 
     /**
