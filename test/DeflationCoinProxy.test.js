@@ -1482,5 +1482,49 @@ describe("DeflationCoinProxy + DeflationCoinUpgradeable", function () {
             );
         });
         
+        it("setPoolAddress with zero address should revert with 'Pool address can't be zero'", async function () {
+            await expect(
+                logicContractV1.connect(owner).setPoolAddress(ethers.ZeroAddress, 1)
+            ).to.be.revertedWith("Pool address can't be zero");
+            
+            await expect(
+                logicContractV1.connect(owner).setPoolAddress(ethers.ZeroAddress, 2)
+            ).to.be.revertedWith("Pool address can't be zero");
+            
+            await expect(
+                logicContractV1.connect(owner).setPoolAddress(ethers.ZeroAddress, 3)
+            ).to.be.revertedWith("Pool address can't be zero");
+        });
+        
+        it("setPoolAddress with contract address should revert with 'Address can not be a contract address'", async function () {
+            // Используем адрес прокси-контракта в качестве примера контрактного адреса
+            const proxyAddr = await proxy.getAddress();
+            
+            await expect(
+                logicContractV1.connect(owner).setPoolAddress(proxyAddr, 1)
+            ).to.be.revertedWith("Address can not be a contract address");
+        });
+        
+        it("Non-ADMIN_ROLE user calling setPoolAddress should revert", async function () {
+            await expect(
+                logicContractV1.connect(user1).setPoolAddress(await user2.getAddress(), 1)
+            ).to.be.revertedWithCustomError(logicContractV1, "AccessControlUnauthorizedAccount");
+        });
+        
+        it("Tests setReferralWallet functionality", async function () {
+            const referralAddr = await referral.getAddress();
+            
+            // Проверяем что установка реферала работает через эффект комиссии при трансфере
+            await logicContractV1.connect(owner).transfer(await user1.getAddress(), ethers.parseEther("20"));
+            await logicContractV1.connect(user1).setReferralWallet(referralAddr);
+            
+            // Проверяем, что при трансфере часть комиссии идет на реферальный кошелек
+            const balanceBefore = await logicContractV1.balanceOf(referralAddr);
+            await logicContractV1.connect(user1).transfer(await user2.getAddress(), ethers.parseEther("10"));
+            const balanceAfter = await logicContractV1.balanceOf(referralAddr);
+            
+            // Проверяем, что баланс реферала увеличился (получил комиссию)
+            expect(balanceAfter).to.be.gt(balanceBefore);
+        });
     });
 });
